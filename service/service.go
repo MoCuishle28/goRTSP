@@ -22,6 +22,12 @@ const (
 
 	SERVER_RTP_PORT  = 55532
 	SERVER_RTCP_PORT = 55533
+
+	WORKER_CACHED_CAP = 100
+)
+
+var (
+	WorkerCached = NewWorkerCache(WORKER_CACHED_CAP)
 )
 
 type parseResult struct {
@@ -59,12 +65,18 @@ func NewWorker(conn net.Conn, id int) *Worker {
 	return &Worker{conn: conn, id: id, clientAddr: conn.RemoteAddr().String()}
 }
 
+func (w *Worker) ReFresh(conn net.Conn, id int) {
+	w.conn, w.id = conn, id
+	w.clientAddr = conn.RemoteAddr().String()
+}
+
 func (w *Worker) String() string {
 	return fmt.Sprintf("{ID: %d, clientAddr: %v}", w.id, w.clientAddr)
 }
 
 func (w *Worker) Process() {
 	defer w.conn.Close()
+	defer WorkerCached.Put(w)
 	defer fmt.Printf("========== close conn[%v] =============\n", w)
 
 	// 针对当前连接做发送和接收操作
@@ -237,7 +249,7 @@ func (w *Worker) sendVideoData(req *parseResult) {
 	// printf("client port:%d\n", clientRtpPort);
 
 	for {
-		fmt.Printf("send video data...\n")
+		fmt.Printf("send video data to %v...\n", w)
 		time.Sleep(5 * time.Second)
 	}
 }

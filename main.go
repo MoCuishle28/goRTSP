@@ -11,6 +11,10 @@ const (
 	PORT = "8554"
 )
 
+// 启动服务后，使用
+// ffmpeg -i rtsp://127.0.0.1:8554
+// 或 ffplay -i rtsp://127.0.0.1:8554
+// 连接服务器
 func main() {
 	// 建立 tcp 服务
 	addr := fmt.Sprintf("%s:%s", IP, PORT)
@@ -31,8 +35,19 @@ func main() {
 
 		// 启动一个单独的 goroutine 去处理连接
 		// go process(conn, count)
-		worker := service.NewWorker(conn, count)
+		worker := CreateWorker(conn, count)
 		go worker.Process()
 		count += 1
 	}
+}
+
+func CreateWorker(conn net.Conn, id int) *service.Worker {
+	worker := service.WorkerCached.Get()
+	if worker != nil {
+		worker.ReFresh(conn, id)
+	} else {
+		worker = service.NewWorker(conn, id)
+	}
+	fmt.Printf("Worker Cached Len: %d\n", service.WorkerCached.Len())
+	return worker
 }
