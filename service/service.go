@@ -56,22 +56,47 @@ func NewParseResult() *parseResult {
 }
 
 type Worker struct {
-	conn       net.Conn
-	id         int
-	clientAddr string
+	conn           net.Conn
+	id             int
+	clientAddr     string
+	clientRtpPort  int
+	clientRtcpPort int
+	rtpConn        *net.UDPConn
+	rtcpConn       *net.UDPConn
 }
 
 func NewWorker(conn net.Conn, id int) *Worker {
-	return &Worker{conn: conn, id: id, clientAddr: conn.RemoteAddr().String()}
+	return &Worker{
+		conn:       conn,
+		id:         id,
+		clientAddr: conn.RemoteAddr().String(),
+		rtpConn:    nil,
+		rtcpConn:   nil,
+	}
 }
 
+// re-write field for re-using Worker struct
 func (w *Worker) ReFresh(conn net.Conn, id int) {
 	w.conn, w.id = conn, id
 	w.clientAddr = conn.RemoteAddr().String()
+	w.clientRtpPort, w.clientRtcpPort = -1, -1
+
+	if w.rtpConn != nil {
+		if err := w.rtpConn.Close(); err != nil {
+			fmt.Printf("Close rtp conn: %v failed\n", w.rtpConn.RemoteAddr().String())
+		}
+	}
+	if w.rtcpConn != nil {
+		if err := w.rtcpConn.Close(); err != nil {
+			fmt.Printf("Close rtcp conn: %v failed\n", w.rtcpConn.RemoteAddr().String())
+		}
+	}
+	w.rtpConn, w.rtcpConn = nil, nil
 }
 
 func (w *Worker) String() string {
-	return fmt.Sprintf("{ID: %d, clientAddr: %v}", w.id, w.clientAddr)
+	return fmt.Sprintf("{ID: %d, clientAddr: %v, clientRtpPort: %v, clientRtcpPort: %v}\n",
+		w.id, w.clientAddr, w.clientRtpPort, w.clientRtcpPort)
 }
 
 func (w *Worker) Process() {
@@ -107,7 +132,7 @@ func (w *Worker) Process() {
 		case DESCRIBE:
 			resp, err = handleDescribe(req)
 		case SETUP:
-			resp, err = handleSetup(req)
+			resp, err = handleSetup(req, w)
 		case PLAY:
 			resp, err = handlePlay(req)
 		default:
@@ -166,6 +191,30 @@ func parseRecv(recv string) (*parseResult, error) {
 	return res, nil
 }
 
+func buildRtpAndRtcpConn(protocal, clientIP string, clientRtpPort, clientRtcpPort int) (
+	rtpConn *net.UDPConn,
+	rtcpConn *net.UDPConn,
+	err error) {
+
+	if rtpAddr, err := net.ResolveUDPAddr(protocal, fmt.Sprintf("%v:%v", clientIP, clientRtpPort)); err != nil {
+		return nil, nil, err
+	} else {
+		if rtpConn, err = net.DialUDP(protocal, nil, rtpAddr); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	if rtcpAddr, err := net.ResolveUDPAddr(protocal, fmt.Sprintf("%v:%v", clientIP, clientRtcpPort)); err != nil {
+		return nil, nil, err
+	} else {
+		if rtcpConn, err = net.DialUDP(protocal, nil, rtcpAddr); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return rtpConn, rtcpConn, nil
+}
+
 func isMethodLine(line string) bool {
 	return strings.HasPrefix(line, OPTIONS) ||
 		strings.HasPrefix(line, DESCRIBE) ||
@@ -220,7 +269,7 @@ func handleDescribe(req *parseResult) (string, error) {
 	return resp, nil
 }
 
-func handleSetup(req *parseResult) (string, error) {
+func handleSetup(req *parseResult, w *Worker) (string, error) {
 	resp := fmt.Sprintf("RTSP/1.0 200 OK\r\n"+
 		"CSeq: %d\r\n"+
 		"Transport: RTP/AVP;unicast;client_port=%d-%d;server_port=%d-%d\r\n"+
@@ -231,6 +280,17 @@ func handleSetup(req *parseResult) (string, error) {
 		req.ClientRtpPort+1,
 		SERVER_RTP_PORT,
 		SERVER_RTCP_PORT)
+
+	w.clientRtpPort, w.clientRtcpPort = req.ClientRtpPort, req.ClientRtcpPort
+	clientIP, _, err := FetchIPAndPort(w.clientAddr)
+	if err != nil {
+		return "", err
+	}
+
+	// TODO 建立 UDP 音频、视频的传输通道，绑定客户端端口
+	if w.rtpConn, w.rtcpConn, err = buildRtpAndRtcpConn("udp", clientIP, w.clientRtpPort, w.clientRtcpPort); err != nil {
+		return "", err
+	}
 	return resp, nil
 }
 
@@ -249,7 +309,15 @@ func (w *Worker) sendVideoData(req *parseResult) {
 	// printf("client port:%d\n", clientRtpPort);
 
 	for {
+		// TODO
 		fmt.Printf("send video data to %v...\n", w)
 		time.Sleep(5 * time.Second)
+
+		// sendBytes, err := w.rtpConn.Write([]byte("xxx"))
+		// if err != nil {
+		// 	fmt.Printf("send to %v failed, err: %v\n", w.clientAddr, err)
+		// 	continue
+		// }
+		// fmt.Printf("send to %v success, send bytes size: %v\n", w.clientAddr, sendBytes)
 	}
 }

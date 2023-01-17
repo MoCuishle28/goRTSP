@@ -1,5 +1,12 @@
 package service
 
+import (
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+)
+
 type WorkerCache struct {
 	queue   []*Worker
 	currIdx int
@@ -39,4 +46,31 @@ func (wc *WorkerCache) Put(w *Worker) {
 
 func (wc *WorkerCache) Len() int {
 	return wc.currIdx + 1
+}
+
+func ListenUDP(addrStr string) (*net.UDPAddr, *net.UDPConn, error) {
+	addr, err := net.ResolveUDPAddr("udp", addrStr)
+	if err != nil {
+		fmt.Println("resolve udp addr failed:", err)
+		return nil, nil, err
+	}
+
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		fmt.Println("listen udp svr failed:", err)
+		return nil, nil, err
+	}
+
+	return addr, conn, nil
+}
+
+func FetchIPAndPort(addr string) (ip string, portNum int, err error) {
+	arr := strings.Split(addr, ":")
+	ip, port := arr[0], arr[1]
+
+	portNum, err = strconv.Atoi(port)
+	if err != nil {
+		return "", -1, err
+	}
+	return ip, portNum, nil
 }

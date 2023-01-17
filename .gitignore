@@ -1,1 +1,8 @@
 go.sum
+
+/videos/*
+/log-test/*
+/udp-test/*
+
+*.mp4
+*.h264
