@@ -3,6 +3,9 @@ go.sum
 /videos/*
 /log-test/*
 /udp-test/*
+/file-op-test/*
+/.vscode/*
 
 *.mp4
 *.h264
+*.bin
