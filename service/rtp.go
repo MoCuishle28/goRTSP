@@ -1,5 +1,7 @@
 package service
 
+import "encoding/binary"
+
 /*
  *    0                   1                   2                   3
  *    7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0|7 6 5 4 3 2 1 0
@@ -17,19 +19,20 @@ package service
  */
 
 const (
+	// TODO 确认这 4 个域在一个字节中所在位的顺序
 	// first 8 bytes
-	CSRCLen       = 0b11110000 //CSRC计数器，占4位，指示CSRC 标识符的个数。
-	CSRCLeft      = 4
-	Extension     = 0b00001000 //占1位，如果X=1，则在RTP报头后跟有一个扩展报头。
-	ExtensionLeft = 3
-	Padding       = 0b00000100 //填充标志，占1位，如果P=1，则在该报文的尾部填充一个或多个额外的八位组，它们不是有效载荷的一部分。
-	PaddingLeft   = 2
-	Version       = 0b00000011 //RTP协议的版本号，占2位，当前协议版本号为2。
+	Version       = 0b11000000 //RTP 协议的版本号，占 2 位，当前协议版本号为 2。
+	VersionLeft   = 6
+	Padding       = 0b00100000 //填充标志，占 1 位，如果 P=1，则在该报文的尾部填充一个或多个额外的 8 位组，它们不是有效载荷的一部分。
+	PaddingLeft   = 5
+	Extension     = 0b00010000 //占 1 位，如果 X=1，则在 RTP 报头后跟有一个扩展报头。
+	ExtensionLeft = 4
+	CSRCLen       = 0b00001111 //CSRC 计数器，占 4 位，指示 CSRC 标识符的个数。
 
 	// second 8 bytes
-	PayloadType     = 0b11111110 //有效载荷类型，占7位，用于说明RTP报文中有效载荷的类型，如GSM音频、JPEM图像等。
-	PayloadTypeLeft = 1
-	Marker          = 0b00000001 //标记，占1位，不同的有效载荷有不同的含义，对于视频，标记一帧的结束；对于音频，标记会话的开始。
+	Marker      = 0b10000000 //标记，占 1 位，不同的有效载荷有不同的含义，对于视频，标记一帧的结束；对于音频，标记会话的开始。
+	MarkerLeft  = 7
+	PayloadType = 0b01111111 //有效载荷类型，占 7 位，用于说明 RTP 报文中有效载荷的类型，如 GSM 音频、JPEM 图像等。
 )
 
 type RtpHeader struct {
@@ -52,4 +55,15 @@ type RtpHeader struct {
 
 	  每个CSRC标识符占32位，可以有0～15个。每个CSRC标识了包含在该RTP报文有效载荷中的所有特约信源
 	*/
+}
+
+func RtpBigEndian(rtpSeq uint16, rtpTS uint32, rtpSSRC uint32) ([]byte, []byte, []byte) {
+	// Network byte order is just big endian
+	seq := make([]byte, 2)
+	ts := make([]byte, 4)
+	ssrc := make([]byte, 4)
+	binary.BigEndian.PutUint16(seq, rtpSeq)
+	binary.BigEndian.PutUint32(ts, rtpTS)
+	binary.BigEndian.PutUint32(ssrc, rtpSSRC)
+	return seq, ts, ssrc
 }
