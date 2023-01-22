@@ -1,4 +1,4 @@
-module rtsp-server
+module goRTSP
 
 go 1.19
 

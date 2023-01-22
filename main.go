@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
+	"goRTSP/service"
 	"net"
-	"rtsp-server/service"
 )
 
 const (

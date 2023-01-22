@@ -3,9 +3,9 @@ package service
 import (
 	"bufio"
 	"fmt"
+	"goRTSP/utils"
 	"net"
 	"os"
-	"rtsp-server/utils"
 	"strings"
 	"time"
 )
