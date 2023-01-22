@@ -2,7 +2,7 @@ go.sum
 
 /videos/*
 /log-test/*
-/udp-test/*
+/net-test/*
 /file-op-test/*
 /.vscode/*
 

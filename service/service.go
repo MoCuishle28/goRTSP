@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"rtsp-server/utils"
 	"strings"
 	"time"
 )
@@ -288,7 +289,7 @@ func handleSetup(req *parseResult, w *Worker) (string, error) {
 		SERVER_RTCP_PORT)
 
 	w.clientRtpPort, w.clientRtcpPort = req.ClientRtpPort, req.ClientRtcpPort
-	clientIP, _, err := FetchIPAndPort(w.clientAddr)
+	clientIP, _, err := utils.FetchIPAndPort(w.clientAddr)
 	if err != nil {
 		return "", err
 	}
@@ -326,7 +327,7 @@ func (w *Worker) sendVideoData(req *parseResult) {
 		panic(err)
 	}
 	defer f.Close()
-	go ReadH264Worker(f, frameOutCh, errChan)
+	go utils.ReadH264Worker(f, frameOutCh, errChan)
 
 	for {
 		select {
@@ -434,7 +435,7 @@ func (w *Worker) RtpSendH264Frame(frame []byte, rtpPkg *RtpPacket) error {
 		}
 	}
 
-	rtpPkg.Header.Timestamp += 90000 / FPS
+	rtpPkg.Header.Timestamp += 90000 / FPS // TODO why 90000?
 	return nil
 }
 
