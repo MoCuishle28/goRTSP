@@ -1,6 +1,8 @@
 package service
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+)
 
 /*
  *    0                   1                   2                   3
@@ -33,6 +35,23 @@ const (
 	Marker      = 0b10000000 //标记，占 1 位，不同的有效载荷有不同的含义，对于视频，标记一帧的结束；对于音频，标记会话的开始。
 	MarkerLeft  = 7
 	PayloadType = 0b01111111 //有效载荷类型，占 7 位，用于说明 RTP 报文中有效载荷的类型，如 GSM 音频、JPEM 图像等。
+
+	// RTP 包的最大 size, 超出的话需要分片发送
+	RTP_MAX_PKT_SIZE = 1400
+
+	// RTP Header init
+	RTP_VESION            = 2
+	RTP_PAYLOAD_TYPE_H264 = 96
+	DEFAULT_CSRCLen       = 0
+	DEFAULT_Extension     = 0
+	DEFAULT_Padding       = 0
+	DEFAULT_Marker        = 0
+	DEFAULT_Seq           = 0
+	DEFAULT_Timestamp     = 0
+	DEFAULT_SSRC          = 0x88923423
+
+	// SPS, PPS
+	SPS_PPS_MASK = 0x1F
 )
 
 type RtpHeader struct {
@@ -57,7 +76,31 @@ type RtpHeader struct {
 	*/
 }
 
-func RtpBigEndian(rtpSeq uint16, rtpTS uint32, rtpSSRC uint32) ([]byte, []byte, []byte) {
+func (h *RtpHeader) SetVersion(version uint8) {
+	h.First = h.First | (version << VersionLeft)
+}
+
+func (h *RtpHeader) SetPadding(padding uint8) {
+	h.First = h.First | (padding << PaddingLeft)
+}
+
+func (h *RtpHeader) SetExtension(extension uint8) {
+	h.First = h.First | (extension << ExtensionLeft)
+}
+
+func (h *RtpHeader) SetCSRCLen(csrcLen uint8) {
+	h.First = h.First | csrcLen
+}
+
+func (h *RtpHeader) SetMarker(marker uint8) {
+	h.Second = h.Second | (marker << MarkerLeft)
+}
+
+func (h *RtpHeader) SetPayloadType(payloadType uint8) {
+	h.Second = h.Second | payloadType
+}
+
+func RtpHeaderBigEndian(rtpSeq uint16, rtpTS uint32, rtpSSRC uint32) ([]byte, []byte, []byte) {
 	// Network byte order is just big endian
 	seq := make([]byte, 2)
 	ts := make([]byte, 4)
@@ -66,4 +109,41 @@ func RtpBigEndian(rtpSeq uint16, rtpTS uint32, rtpSSRC uint32) ([]byte, []byte, 
 	binary.BigEndian.PutUint32(ts, rtpTS)
 	binary.BigEndian.PutUint32(ssrc, rtpSSRC)
 	return seq, ts, ssrc
+}
+
+func FetchFirstAndSecond(rtp *RtpHeader) (version, padding, extension, csrcLen uint8, marker, payloadType uint8) {
+	version = (rtp.First & Version) >> VersionLeft
+	padding = (rtp.First & Padding) >> PaddingLeft
+	extension = (rtp.First & Extension) >> ExtensionLeft
+	csrcLen = rtp.First & CSRCLen
+
+	marker = (rtp.Second & Marker) >> MarkerLeft
+	payloadType = rtp.Second & PayloadType
+	return
+}
+
+func NewRtpHeader(csrcLen, extension, padding, version, payloadType, marker uint8, seq uint16, timestamp, ssrc uint32) *RtpHeader {
+	header := new(RtpHeader)
+	header.SetCSRCLen(csrcLen)
+	header.SetExtension(extension)
+	header.SetPadding(padding)
+	header.SetVersion(version)
+	header.SetPayloadType(payloadType)
+	header.SetMarker(marker)
+	header.Seq = seq
+	header.Timestamp = timestamp
+	header.SSRC = ssrc
+	return header
+}
+
+type RtpPacket struct {
+	Header  *RtpHeader
+	Payload []byte
+}
+
+func NewRtpPacket(header *RtpHeader, payloadSize int) *RtpPacket {
+	return &RtpPacket{
+		Header:  header,
+		Payload: make([]byte, payloadSize),
+	}
 }

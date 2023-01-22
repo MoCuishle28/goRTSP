@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 )
@@ -23,7 +24,12 @@ const (
 	SERVER_RTP_PORT  = 55532
 	SERVER_RTCP_PORT = 55533
 
-	WORKER_CACHED_CAP = 100
+	WORKER_CACHED_CAP   = 100
+	FRAME_OUT_CHAN_SIZE = 32
+
+	TEST_VIDEO_FILE_NAME = "videos/test.h264"
+	SEND_FRAME_SLEEP_GAP = 30 * time.Millisecond
+	FPS                  = 29 // 每秒几帧 TODO 应该从视频文件中获取
 )
 
 var (
@@ -308,16 +314,149 @@ func (w *Worker) sendVideoData(req *parseResult) {
 	// printf("client ip:%s\n", clientIP);
 	// printf("client port:%d\n", clientRtpPort);
 
-	for {
-		// TODO
-		fmt.Printf("send video data to %v...\n", w)
-		time.Sleep(5 * time.Second)
+	rtpHeader := NewRtpHeader(0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H264, 0, 0, 0, 0x88923423)
+	rtpPkg := NewRtpPacket(rtpHeader, RTP_MAX_PKT_SIZE+2)
 
-		// sendBytes, err := w.rtpConn.Write([]byte("xxx"))
-		// if err != nil {
-		// 	fmt.Printf("send to %v failed, err: %v\n", w.clientAddr, err)
-		// 	continue
-		// }
-		// fmt.Printf("send to %v success, send bytes size: %v\n", w.clientAddr, sendBytes)
+	frameOutCh := make(chan []byte, FRAME_OUT_CHAN_SIZE)
+	errChan := make(chan error)
+
+	f, err := os.Open(TEST_VIDEO_FILE_NAME)
+	if err != nil {
+		fmt.Printf("open video failed: %v\n", err)
+		panic(err)
 	}
+	defer f.Close()
+	go ReadH264Worker(f, frameOutCh, errChan)
+
+	for {
+		select {
+		case frame := <-frameOutCh:
+			if len(frame) == 0 { // init frame
+				continue
+			}
+			if err := w.RtpSendH264Frame(frame, rtpPkg); err != nil {
+				fmt.Printf("when send H264 frame, got err: %v\n", err)
+			}
+		case err := <-errChan:
+			fmt.Printf("got err in Read H264 Worker: %v\n", err)
+			return
+		}
+
+		// TODO
+		time.Sleep(SEND_FRAME_SLEEP_GAP)
+	}
+}
+
+func (w *Worker) RtpSendH264Frame(frame []byte, rtpPkg *RtpPacket) error {
+	// 每次开始前恢复最大容量，再根据实际情况切片
+	rtpPkg.Payload = rtpPkg.Payload[:RTP_MAX_PKT_SIZE+2] // TODO 这个耦合太严重了
+	naluType := frame[0]
+	frameSize := len(frame)
+
+	if frameSize <= RTP_MAX_PKT_SIZE { // 一次就能发送完成
+		/*   0 1 2 3 4 5 6 7 8 9
+		/*  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		/*  |F|NRI|  Type   | a single NAL unit ... |
+		/*  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		*/
+		rtpPkg.Payload = rtpPkg.Payload[:len(frame)]
+		copy(rtpPkg.Payload, frame)
+
+		if err := w.RtpSendPkgWithUDP(rtpPkg); err != nil {
+			return fmt.Errorf("send pkg with udp failed: %v", err)
+		}
+
+		rtpPkg.Header.Seq++
+		// 如果是 SPS、PPS 就不需要加时间戳
+		if (naluType&SPS_PPS_MASK) == 7 || (naluType&SPS_PPS_MASK) == 8 {
+			return nil
+		}
+
+	} else { // nalu长度小于最大包长度：分片模式
+		//*  0                   1                   2
+		//*  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3
+		//* +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		//* | FU indicator  |   FU header   |   FU payload   ...  |
+		//* +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+		//*     FU Indicator
+		//*    0 1 2 3 4 5 6 7
+		//*   +-+-+-+-+-+-+-+-+
+		//*   |F|NRI|  Type   |
+		//*   +---------------+
+
+		//*      FU Header
+		//*    0 1 2 3 4 5 6 7
+		//*   +-+-+-+-+-+-+-+-+
+		//*   |S|E|R|  Type   |
+		//*   +---------------+
+
+		pkgNum := frameSize / RTP_MAX_PKT_SIZE        // 有几个完整的包
+		remainPkgSize := frameSize % RTP_MAX_PKT_SIZE // 剩余不完整包的大小
+		fmt.Printf("pkgNum: %v, remain pkg size: %v\n", pkgNum, remainPkgSize)
+		pos := 1                                             // frame 发送位置
+		rtpPkg.Payload = rtpPkg.Payload[:RTP_MAX_PKT_SIZE+2] // +2 是前两字节
+
+		// 发送完整的包
+		for i := 0; i < pkgNum; i++ {
+			rtpPkg.Payload[0] = (naluType & 0x60) | 28
+			rtpPkg.Payload[1] = naluType & 0x1F
+
+			if i == 0 { //第一包数据
+				rtpPkg.Payload[1] |= 0x80 // start
+			} else if (remainPkgSize == 0) && (i == pkgNum-1) { //最后一包数据
+				rtpPkg.Payload[1] |= 0x40 // end
+			}
+
+			// 从 pos 开始的 RTP_MAX_PKT_SIZE 字节
+			copy(rtpPkg.Payload[2:], frame[pos:pos+RTP_MAX_PKT_SIZE])
+			if err := w.RtpSendPkgWithUDP(rtpPkg); err != nil {
+				return fmt.Errorf("send No.%d pkg with udp failed: %v", i+1, err)
+			}
+
+			rtpPkg.Header.Seq++
+			pos += RTP_MAX_PKT_SIZE
+		}
+
+		// 发送剩余的数据
+		if remainPkgSize > 0 {
+			rtpPkg.Payload[0] = (naluType & 0x60) | 28
+			rtpPkg.Payload[1] = naluType & 0x1F
+			rtpPkg.Payload[1] |= 0x40 //end
+
+			// 从 pos 位置开始的 remainPkgSize 个字节
+			copy(rtpPkg.Payload[2:], frame[pos:])
+			if err := w.RtpSendPkgWithUDP(rtpPkg); err != nil {
+				return fmt.Errorf("send final pkg with udp failed: %v", err)
+			}
+
+			rtpPkg.Header.Seq++
+		}
+	}
+
+	rtpPkg.Header.Timestamp += 90000 / FPS
+	return nil
+}
+
+func (w *Worker) RtpSendPkgWithUDP(pkg *RtpPacket) error {
+	data := make([]byte, 0, 32+len(pkg.Payload))
+	data = append(data, pkg.Header.First)
+	data = append(data, pkg.Header.Second)
+
+	// 转为大端序
+	seq, ts, ssrc := RtpHeaderBigEndian(pkg.Header.Seq, pkg.Header.Timestamp, pkg.Header.SSRC)
+	data = append(data, seq...)
+	data = append(data, ts...)
+	data = append(data, ssrc...)
+
+	data = append(data, pkg.Payload...)
+
+	// send w/ UDP
+	sendBytes, err := w.rtpConn.Write(data)
+	if err != nil {
+		fmt.Printf("send to %v failed, err: %v\n", w.clientAddr, err)
+		return err
+	}
+	fmt.Printf("send to %v success, send bytes size: %v\n", w.clientAddr, sendBytes)
+	return nil
 }
